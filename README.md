@@ -145,21 +145,35 @@ powershell -File tests\parse-check.ps1                # → PS-PARSE-OK
 | 桌面版双击没反应 | 看 `%LOCALAPPDATA%\wx-sph-dl\logs\`（绿色版看 exe 同目录 `logs\`） |
 | Defender 删掉了 exe | 改用 `build.ps1 -Portable` 的目录版（不释放 runtime 到 AppData） |
 
-## 已验证
+## 已验证（每条都附可复现的证据）
 
-- 微信 PC 4.1.13.65（Windows 11）：端到端跑通，产出 1920×1080 HEVC + AAC 原始文件（33.17s / 5.32MB，ffprobe 正常，抽帧人工确认）。
+**A. 抓取 → 解密管线：端到端跑通过**（2026-09-17，Windows 11 + 微信 PC 4.1.13.65）
+
+- 产物：`output\遇见浦发-浦发银行灯光秀-1080p.mp4` —— **5,580,633 字节 / 33.173 秒 / HEVC 1920×1080 + AAC / 995 帧**，首 box 为 `ftyp`（size=`0x1c`=28）。ffprobe 与抽帧（`output\frame-live1.jpg`）均人工确认。
+- 中间证据：`state\heads\head1.bin`（262,144 B 密文头）、`state\keys\keystream.bin`（131,072 B 密钥流）。
+- **必须说明的边界**：这一次是在本工具成型**过程中**完成的（自建 MITM 抓取取流地址 → 播放期间扫内存取回密钥流 → 离线解密），用的是如今这批脚本的前身；那次运行的抓包日志（`capture.jsonl`/`videos.jsonl`）没有留存，所以**无法从现有证据反推当时执行的确切命令**。产物本身可随时用 ffprobe 复验。
+- 这就是「管线可行」的证据，**不等于**「发行版入口跑通过」——见「已知未做」。
+
+**B. 单元/回归与构建自检**（全部可在本机重跑）
+
 - `setup` 安全闸门回归：**22 项断言全绿**，含 `{}`/类型错/截断/BOM/无备份/saveproxy 失败，且用「注册表前后快照一致」证明中止时未改网络。
 - MITM 证书链自检：Windows PKI 签发 CA + 叶子 → CONNECT+TLS 握手 `authorized=true` → 服务端实际链正好两级（叶子 + 本 CA）→ 真实 `HTTP 200`。
-- 证书陷阱回归 `cert-collision-tests.ps1`：**8/8 通过** —— 存储里放一个同名旧 CA 时，连续两轮自检都通过；state 里留着旧 pfx 但 CA 已被清掉时，会重新签发而不是复用（旧代码在这两种场景下都会失败）。
-- 单文件 exe 与便携版：`--selftest` 均为 `EXE-SELFTEST-OK`，且 `build.ps1` 现在**同时校验退出码与 `EXE-SELFTEST-OK` 标记**（此前会误报成功）。
+- 证书陷阱回归 `cert-collision-tests.ps1`：**8/8 通过** —— 存储里放一个同名旧 CA 时连续两轮自检都通过；state 里留着旧 pfx 但 CA 已被清掉时会重新签发而不是复用（旧代码在这两种场景下都会失败）。
+- 代理还原回归 `proxy-restore-tests.ps1`：**21/21 通过** —— 用户自带 PAC 原样写回、空值删键、四字段照备份还原、只删**记录过的**端点、三条"本地但不是我们的 PAC"反例被 `KEEP`、`saveproxy` 把自己的端点归一化为空并告警；结束时注册表与开跑前快照完全一致。
+- 进程归属回归 `orphan-proxy-tests.ps1`：**16/16 通过** —— 无 pid 文件的自家代理被停掉且端口释放（`ORPHAN-STOPPED`）；异目录同名 `proxy.mjs`、记录缺失、无关监听者三种情况一律**拒绝终止**（`ORPHAN-REFUSED`）且进程存活。
+- 单文件 exe 与便携版：`--selftest` 均为 `EXE-SELFTEST-OK`，且 `build.ps1` **同时校验退出码与 `EXE-SELFTEST-OK` 标记**（此前会误报成功）。
 - 证书卫生：`doctor` 三存储残留 `My=0 CA=0 Root=0`；受信任根里的历史残留 CA 已用 `tests\remove-root-ca.ps1` 删除。
-- 代理还原回归 `proxy-restore-tests.ps1`：**15/15 通过** —— 用户自带 PAC 原样写回、空值删键、四字段照备份还原、`dropownpac` 只删自己的、`saveproxy` 把自己的 PAC 归一化为空并告警、陌生 PAC 一字不改；结束时注册表与开跑前快照完全一致。
-- 孤儿进程回归 `orphan-proxy-tests.ps1`：**8/8 通过** —— 无 pid 文件的代理被停掉且端口释放（`ORPHAN-STOPPED`），陌生程序占用同端口时**拒绝终止**（`ORPHAN-REFUSED`）。
-- 实测修复：一次中断的实跑遗留下的 `AutoConfigURL=http://127.0.0.1:18080/proxy.pac`（以及被 `setpac` 改成 0 的 `ProxyEnable`）已按 `state/original-proxy.json` 还原为原值（示例：`ProxyEnable=1 / ProxyServer=127.0.0.1:1080 / 无 PAC`），端口上的孤儿代理也已停止。
+- 发布前隐私扫描 `privacy-scan.ps1`：发布集合 **35 文件 0 命中**（含本机路径/账号名/内网段/活动签名值等模式）。
 
-## 已知未做
+**C. 一次事故的修复记录**（如实保留）
 
-- 工具形式的**端到端实跑**（重新挂 MITM、改系统代理、由用户在微信里播放）尚未在本轮复验；上一轮的抓包/解密链路证据见 `state/` 与 `output/`。
+- 2026-09-17 的一次真实尝试在 `cleanup` 阶段中断，留下 `AutoConfigURL=http://127.0.0.1:18080/proxy.pac`，且 `setpac` 把 `ProxyEnable` 置成了 0（系统代理静默失效），端口上还留着无 pid 文件的代理进程。已按 `state/original-proxy.json` 还原为原值，并据此给工具加了：机器级归属记录、`dropownpac` 兜底、孤儿代理三重证据判定。
+
+## 已知未做 / 待复验
+
+- **用本工具自己的入口跑一遍完整闭环**：`setup` → 完全退出并重开微信 → 播放视频 → `watch` → `key` → `decrypt` → `cleanup`（或桌面版的 ①②③④⑤ 五个按钮）。上面 A 项的产物出自同一套原理，但**不是**通过这些入口产出的；在「CA 唯一主体、机器级归属记录、cleanup 兜底」这些改动之后，**还没有一次真实的全程验证**。
+- 换句话说：**目前不存在"发行版在本机完整跑通"的记录**；"已验证"仅覆盖 A 的管线证据与 B 的各项回归。
+- 抓包日志（`capture.jsonl`/`videos.jsonl`）在本仓库中不保留（`.gitignore` 排除 `state/`），因为它包含带签名、有时效的 CDN 地址。
 
 ## 合法使用
 

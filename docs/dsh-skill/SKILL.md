@@ -15,7 +15,9 @@ description: 下载微信视频号（finder）分享链接背后的原始视频�
 2. **加密**：该 CDN **只加密文件前 128KB**（响应头 `x-encflag:1`、`x-enclen:131072`；Range 起点越过 128KB 后 `x-enclen` 变 0）。其余是明文标准 MP4（可用 `moov` 下的 `trak/mdia/minf/stbl` 与 `mdat` 大小闭合来验证）。
 3. **解密**：密钥流 = `ISAAC-64(decodeKey)` 生成的 131072 字节，worker 里实现为 `buf[i] ^= keystream[i]`（`decrypt-video-core` v1.3.0）。`decodeKey` 不下发到 HTTP，但它对应的**密钥流只在播放期间驻留客户端进程内存** → 用「密文 + 已知明文 `ftyp`」反推特征，直接从内存里捞那 128KB。
 
-本技能附带一个已验证的 CLI：`scripts/sph.mjs`；另附 `scripts/gui/` + `scripts/build/`（可用系统自带 `csc.exe` 打成**免安装桌面 exe**，内嵌 Node，目标机不需要 Node/npm/openssl）与 `scripts/tests/`（setup 安全闸门、证书链、证书陷阱、`.ps1` 语法共 4 组回归）。`scripts/` 与工具源码目录**逐字节一致**，可用 `build/sync-skill.ps1` 同步并校验哈希。
+本技能附带一个 CLI：`scripts/sph.mjs`；另附 `scripts/gui/` + `scripts/build/`（可用系统自带 `csc.exe` 打成**免安装桌面 exe**，内嵌 Node，目标机不需要 Node/npm/openssl）与 `scripts/tests/`（setup 安全闸门、证书链、证书陷阱、代理还原、进程归属、`.ps1` 语法共 6 组回归）。`scripts/` 与工具源码目录**逐字节一致**，可用 `build/sync-skill.ps1` 同步并校验哈希。
+
+**验证范围要分清**：抓取→解密**原理链路**已端到端跑通（产物 `1920×1080 HEVC + AAC / 33.173s`，ffprobe + 抽帧确认，见 `state/heads`、`state/keys`）；但**用现在这些入口（CLI 或桌面版）跑一遍 `setup → 播放 → watch → key → decrypt → cleanup` 全程，尚无一次真实执行记录**。别把前者说成后者。
 
 ## 前置条件
 
