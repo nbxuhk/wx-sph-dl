@@ -1,0 +1,17 @@
+# Runtime state and captured evidence: may contain signed CDN URLs (encfilekey/token/sign)
+# and the machine's own proxy settings. Never commit these.
+state/
+state-*/
+records/
+logs/
+output/
+dist/
+
+# Local scratch
+*.log
+*.tmp
+*.bak
+selftest-*.log
+
+# commit-message scratch
+build/commit-message.txt
