@@ -95,12 +95,17 @@ ps/certs.ps1          # CA/叶子证书签发与清理（Windows PKI，PFX 直�
 ps/purge-certs.ps1    # 维护：清掉本工具在 My / 中间 CA 存储里遗留的全部证书
 gui/WxSphDl.cs        # WinForms 桌面窗口（csc 编译，无 designer 依赖）
 build/build.ps1      # 构建单文件 exe / 便携目录（含可信的 EXE-SELFTEST 门禁）
+build/sync-skill.ps1 # 把源码同步进 DSH 技能目录并逐文件校验 SHA-256
+build/install-gh.ps1 + download-gh.mjs + gh-device-login.mjs # 装便携版 gh / 设备码登录（token 不打印）
+build/publish.ps1    # 建公开仓库、推 main、建 Release 并上传 exe 与便携版 zip
 tests/setup-gate-tests.mjs     # setup 安全闸门回归（T1–T10；含“中止时未改网络”断言）
 tests/mitm-selftest.mjs        # 证书链自检（CONNECT+TLS+真实 GET 200 + 服务端实际链断言）
 tests/cert-collision-tests.ps1 # 同名旧 CA / CA 已被清掉 两种证书陷阱的回归（8 断言）
-tests/proxy-restore-tests.ps1  # 代理还原回归（用户自带 PAC 原样写回 / 空值删键 / 自己的 PAC 归一化，15 断言）
-tests/orphan-proxy-tests.ps1   # 孤儿代理：停掉自己的、拒绝杀陌生进程（8 断言）
-tests/foreign-listener.mjs     # 上一条用的“陌生监听者”替身
+tests/proxy-restore-tests.ps1  # 代理还原回归（自带 PAC 原样写回 / 空值删键 / 只认记录过的端点，21 断言）
+tests/orphan-proxy-tests.ps1   # 进程归属：停自己的孤儿、拒绝异目录同名 proxy.mjs 与无记录者（16 断言）
+tests/fixtures/foreign-proxy/proxy.mjs # 上一条用的“别的项目的同名脚本”夹具
+tests/foreign-listener.mjs     # 无关监听者替身
+tests/privacy-scan.ps1         # 发布前隐私扫描（本机路径/账号/内网 IP/活动签名值）
 tests/parse-check.ps1          # 全部 .ps1 语法解析检查（不执行）
 tests/remove-root-ca.ps1       # 清受信任根里的残留 CA（.NET/CryptoAPI）
 tests/probe-certs.ps1          # 只读：枚举三个存储里的本工具证书与可用 .NET API
@@ -116,8 +121,9 @@ dist/                 # 构建产物
 node tests\setup-gate-tests.mjs                       # → GATE-TESTS-OK (失败 0 项)
 node tests\mitm-selftest.mjs                          # → SELFTEST-OK（自清理临时证书）
 powershell -File tests\cert-collision-tests.ps1       # → CERTS-REGRESSION-OK（8 断言）
-powershell -File tests\proxy-restore-tests.ps1        # → PROXY-RESTORE-OK（15 断言，结束时把注册表还原回原样）
-powershell -File tests\orphan-proxy-tests.ps1         # → ORPHAN-KILL-OK（8 断言）
+powershell -File tests\proxy-restore-tests.ps1        # → PROXY-RESTORE-OK（21 断言，结束时把注册表还原回原样）
+powershell -File tests\orphan-proxy-tests.ps1         # → ORPHAN-KILL-OK（16 断言）
+powershell -File tests\privacy-scan.ps1               # → PRIVACY-SCAN-OK（发布前必跑）
 powershell -File tests\parse-check.ps1                # → PS-PARSE-OK
 ```
 
@@ -132,7 +138,7 @@ powershell -File tests\parse-check.ps1                # → PS-PARSE-OK
 | TLS 报 `self-signed certificate in certificate chain` | 修复前有两个成因，现都已堵住：①证书存储里累积多个**同名** CA；②`certutil -encode` **不覆盖已存在的 ca.crt**，代理签了新 CA 而客户端仍信任旧 PEM。现在 CA 主体带唯一后缀、`ca.crt` 自己写并回读自校验、叶子 PFX 链逐张校验。仍遇到则跑 `ps\purge-certs.ps1` + `tests\remove-root-ca.ps1` 清干净后重试 |
 | 换了新版 exe，行为却没变 | 修复前 `version.stamp` 只由常量拼成，导致**升级后仍跑首次解包的旧脚本**。现在 stamp 含内嵌脚本的 SHA-256，脚本一变就重新解包 |
 | `build.ps1` 报 `exe --selftest failed` | 这是真失败（旧版对 `/target:winexe` 用 `& $exe --selftest` 会拿到假的退出码 0）。看它打印的自检日志：常见原因是 `doctor` 判定受信任根里还有残留 CA |
-| `cleanup` 后 `AutoConfigURL` 还在、或 18080 仍在监听 | 说明上一轮实跑**没跑完 cleanup**（PID 文件与 state 一起丢了）。现在 `cleanup` 会自动兜底：删掉自己签名的 PAC、并按端口属主+命令行核实后停掉孤儿代理。手工等价命令：`ps\win.ps1 -Mode dropownpac`；核对注册表用 `ps\win.ps1 -Mode getproxy` |
+| `cleanup` 后 `AutoConfigURL` 还在、或 18080 仍在监听 | 说明上一轮实跑**没跑完 cleanup**（PID 文件与 state 一起丢了）。现在 `cleanup` 会自动兜底：只删**记录过的**自有 PAC 端点，并按「机器级运行记录 + 脚本绝对路径 + 启动时间」三重证据核实后停掉孤儿代理（无记录者一律拒绝）。手工等价命令：`ps\win.ps1 -Mode dropownpac`；核对注册表用 `ps\win.ps1 -Mode getproxy` |
 | 担心「我们写的 PAC 被当成你的原值」 | 已防：`saveproxy` 遇到 `127.0.0.1:<port>/proxy.pac` 会记成空值并打印 `WARN normalized`；`tests\proxy-restore-tests.ps1` 覆盖该行为 |
 | `setup` 报「代理备份无法解析/schema 不合法」并中止 | 这是**保护**而非故障。删除 `state/original-proxy.json` 后重跑 `setup` 重新备份即可 |
 | 清理后上网异常 | `node sph.mjs cleanup` 会从 `state/original-proxy.json` 还原；必要时核对 `HKCU\...\Internet Settings` |
